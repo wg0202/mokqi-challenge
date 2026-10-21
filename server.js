@@ -511,14 +511,23 @@ io.on("connection", socket => {
     }
   });
 
-  socket.on("start-game", () => {
+   socket.on("start-game", payload => {
     const room = getRoomForSocket(socket);
     if (!room || room.players.length !== 2 || room.started) return;
     if (room.players.some(p => !p.connected)) return socket.emit("action-error", "请等待两位玩家都在线");
+    
+    // 开启测试模式：如果传入了 level 参数，直接跳到指定关卡
     room.started = true;
-    room.level = 1;
     room.hearts = 0;
+    room.level = Number(payload?.level) || 1; 
+    
+    // 清空之前可能残留的计时器
+    stopRoomTimers(room);
+    
     beginLevel(room);
+    
+    // 给前端发个提示
+    socket.emit("action-success", `已启动测试模式，直接进入第 ${room.level} 关！`);
   });
 
   socket.on("row-swipe", payload => {
