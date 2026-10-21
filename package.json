@@ -1,13 +1,20 @@
 {
-  "name": "couple-mind-game",
+  "name": "couple-coop-mobile-game",
   "version": "1.0.0",
-  "description": "情侣默契大通关双人联机小游戏",
+  "private": true,
+  "description": "Mobile-first cooperative couple game with Express, Socket.IO and MySQL",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
   },
+  "engines": {
+    "node": ">=18"
+  },
   "dependencies": {
+    "bcrypt": "^5.1.1",
     "express": "^4.21.2",
+    "jsonwebtoken": "^9.0.2",
+    "mysql2": "^3.11.5",
     "socket.io": "^4.8.1"
   }
 }
