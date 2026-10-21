@@ -1,4 +1,4 @@
-const socket = io({ autoConnect: false }); // 初始不连接
+const socket = io({ autoConnect: false });
 const $ = id => document.getElementById(id);
 
 let currentToken = "";
@@ -22,11 +22,8 @@ $("btn-register").onclick = async () => {
     body: JSON.stringify({ username, password })
   });
   const data = await res.json();
-  if (data.ok) {
-    toast("注册成功，请登录！");
-  } else {
-    toast(data.message);
-  }
+  if (data.ok) toast("注册成功，请登录！");
+  else toast(data.message);
 };
 
 // 登录
@@ -48,9 +45,8 @@ $("btn-login").onclick = async () => {
     $("lobby-screen").classList.remove("hidden");
     $("my-name").textContent = data.user.username;
     
-    // 登录成功后，带上 Token 连接 WebSocket
     socket.auth = { token: currentToken };
-    socket.connect();
+    socket.connect(); // 登录成功再连接
   } else {
     toast(data.message);
   }
@@ -58,8 +54,11 @@ $("btn-login").onclick = async () => {
 
 // 创建房间
 $("create-room-btn").onclick = () => {
-  console.log("点击了创建房间"); // 用于测试，可以在F12看到
-  if (!socket.connected) return toast("连接服务器中，请稍后...");
+  console.log("点击了创建房间，正在发送请求..."); // 方便 F12 看
+  if (!socket.connected) {
+    toast("服务器正在连接，请稍等1秒再点...");
+    return;
+  }
   socket.emit("create-room");
 };
 
@@ -67,9 +66,10 @@ $("create-room-btn").onclick = () => {
 $("join-room-btn").onclick = () => {
   const code = $("room-code-input").value.trim();
   if (code) socket.emit("join-room", { code });
+  else toast("请输入房间号");
 };
 
-// 选关按钮
+// 选关
 document.querySelectorAll(".level-btn").forEach(btn => {
   btn.onclick = () => {
     const level = Number(btn.dataset.level);
@@ -77,17 +77,18 @@ document.querySelectorAll(".level-btn").forEach(btn => {
   };
 });
 
-// Socket 监听
-socket.on("connect", () => {
-  toast("连接服务器成功");
-});
+// 监听服务器返回
+socket.on("connect", () => console.log("Socket 已连接"));
+socket.on("connect_error", (err) => toast(err.message || "连接失败"));
 
-socket.on("connect_error", (err) => {
-  toast(err.message || "连接失败");
+socket.on("room-created", (data) => {
+  console.log("房间创建成功，房间号:", data.code);
+  toast(`房间创建成功！房间号：${data.code}`);
+  // 把房间号自动填到输入框里
+  if ($("room-code-input")) $("room-code-input").value = data.code;
 });
 
 socket.on("room-state", (room) => {
-  // 两人到齐后显示选关按钮
   if (room.players.length === 2) {
     $("room-actions").classList.add("hidden");
     $("level-select-panel").classList.remove("hidden");
@@ -99,8 +100,6 @@ socket.on("game-started", (data) => {
   $("lobby-screen").classList.add("hidden");
   $("game-screen").classList.remove("hidden");
   $("game-title").textContent = `正在挑战第 ${data.level} 关`;
-  
-  // 这里之后再把具体的划船、推箱子渲染代码贴进来
 });
 
 socket.on("action-error", (msg) => toast(msg));
