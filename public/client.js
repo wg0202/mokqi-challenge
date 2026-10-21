@@ -1,56 +1,107 @@
-<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>情侣默契大冒险</title>
-  <link rel="stylesheet" href="/style.css">
-  <script src="/socket.io/socket.io.js"></script>
-</head>
-<body>
-  <div class="app">
-    <header class="brand">
-      <div class="brand-heart">💖</div>
-      <h1>情侣默契大冒险</h1>
-    </header>
+const socket = io({ autoConnect: false }); // 初始不连接
+const $ = id => document.getElementById(id);
 
-    <!-- 登录注册界面 -->
-    <div id="auth-screen" class="card">
-      <input type="text" id="username" placeholder="昵称">
-      <input type="password" id="password" placeholder="密码(至少6位)">
-      <button id="btn-register" class="btn secondary">注册</button>
-      <button id="btn-login" class="btn primary">登录</button>
-    </div>
+let currentToken = "";
 
-    <!-- 房间大厅 (含选关) -->
-    <div id="lobby-screen" class="card hidden">
-      <h2>欢迎, <span id="my-name"></span>!</h2>
-      
-      <div id="room-actions">
-        <button id="create-room-btn" class="btn primary">创建房间</button>
-        <div style="margin-top: 10px; display: flex; gap: 8px;">
-          <input type="text" id="room-code-input" placeholder="输入6位房间号">
-          <button id="join-room-btn" class="btn secondary">加入</button>
-        </div>
-      </div>
+function toast(msg) {
+  const el = $("notice");
+  el.textContent = msg;
+  el.classList.add("show");
+  setTimeout(() => el.classList.remove("show"), 2500);
+}
 
-      <!-- 选关面板（默认隐藏，两人到齐后显示） -->
-      <div id="level-select-panel" class="hidden" style="margin-top: 20px;">
-        <h3 style="text-align: center; color: #ed6799;">🎮 选择关卡开始挑战</h3>
-        <button class="btn secondary level-btn" data-level="1">第 1 关：双人划船 🚣</button>
-        <button class="btn secondary level-btn" data-level="2">第 2 关：双人拔河 🪢</button>
-        <button class="btn secondary level-btn" data-level="3">第 3 关：双人迷宫 🏁</button>
-        <button class="btn secondary level-btn" data-level="4">第 4 关：双人推箱子 🎁</button>
-      </div>
-    </div>
+// 注册
+$("btn-register").onclick = async () => {
+  const username = $("username").value.trim();
+  const password = $("password").value.trim();
+  if (!username || !password) return toast("请输入账号密码");
 
-    <!-- 游戏界面 -->
-    <div id="game-screen" class="card hidden">
-      <h2 id="game-title">游戏加载中...</h2>
-    </div>
-  </div>
+  const res = await fetch("/api/register", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username, password })
+  });
+  const data = await res.json();
+  if (data.ok) {
+    toast("注册成功，请登录！");
+  } else {
+    toast(data.message);
+  }
+};
 
-  <div id="notice" class="notice"></div>
-  <script src="/client.js"></script>
-</body>
-</html>
+// 登录
+$("btn-login").onclick = async () => {
+  const username = $("username").value.trim();
+  const password = $("password").value.trim();
+  if (!username || !password) return toast("请输入账号密码");
+
+  const res = await fetch("/api/login", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username, password })
+  });
+  const data = await res.json();
+  
+  if (data.ok) {
+    currentToken = data.token;
+    $("auth-screen").classList.add("hidden");
+    $("lobby-screen").classList.remove("hidden");
+    $("my-name").textContent = data.user.username;
+    
+    // 登录成功后，带上 Token 连接 WebSocket
+    socket.auth = { token: currentToken };
+    socket.connect();
+  } else {
+    toast(data.message);
+  }
+};
+
+// 创建房间
+$("create-room-btn").onclick = () => {
+  console.log("点击了创建房间"); // 用于测试，可以在F12看到
+  if (!socket.connected) return toast("连接服务器中，请稍后...");
+  socket.emit("create-room");
+};
+
+// 加入房间
+$("join-room-btn").onclick = () => {
+  const code = $("room-code-input").value.trim();
+  if (code) socket.emit("join-room", { code });
+};
+
+// 选关按钮
+document.querySelectorAll(".level-btn").forEach(btn => {
+  btn.onclick = () => {
+    const level = Number(btn.dataset.level);
+    socket.emit("start-game", { level });
+  };
+});
+
+// Socket 监听
+socket.on("connect", () => {
+  toast("连接服务器成功");
+});
+
+socket.on("connect_error", (err) => {
+  toast(err.message || "连接失败");
+});
+
+socket.on("room-state", (room) => {
+  // 两人到齐后显示选关按钮
+  if (room.players.length === 2) {
+    $("room-actions").classList.add("hidden");
+    $("level-select-panel").classList.remove("hidden");
+    toast("两人已到齐，请选择关卡！");
+  }
+});
+
+socket.on("game-started", (data) => {
+  $("lobby-screen").classList.add("hidden");
+  $("game-screen").classList.remove("hidden");
+  $("game-title").textContent = `正在挑战第 ${data.level} 关`;
+  
+  // 这里之后再把具体的划船、推箱子渲染代码贴进来
+});
+
+socket.on("action-error", (msg) => toast(msg));
+socket.on("action-success", (msg) => toast(msg));
