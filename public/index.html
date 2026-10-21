@@ -1,154 +1,113 @@
-
-<!DOCTYPE html>
+<!doctype html>
 <html lang="zh-CN">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#fff0f6">
-  <title>情侣默契大通关 💕</title>
+  <title>心动搭档 · 双人合作游戏</title>
   <link rel="stylesheet" href="/style.css">
   <script src="/socket.io/socket.io.js"></script>
 </head>
 <body>
-  <div class="decor decor-one">☁️</div>
-  <div class="decor decor-two">⭐</div>
-  <div class="decor decor-three">💗</div>
-  <div class="decor decor-four">☁️</div>
-
+  <div class="float float-a">☁️</div><div class="float float-b">⭐</div>
   <main class="app">
-    <header class="header">
-      <div class="logo">💕</div>
-      <h1>情侣默契大通关</h1>
-      <p class="subtitle">两颗心，一起闯关，一起变甜！</p>
+    <header class="brand">
+      <div class="brand-heart">💗</div>
+      <h1>心动搭档</h1>
+      <p>两个人，一条心，一起闯关！</p>
     </header>
 
-    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+    <div id="notice" class="notice" role="status" aria-live="polite"></div>
 
-    <section id="home-screen" class="panel">
-      <div class="hero">
-        <div class="hero-emoji">🐰💗🐻</div>
-        <h2>准备好测试你们的默契了吗？</h2>
-        <p>和最喜欢的人组队，收集 45 点爱心！</p>
+    <section id="auth-panel" class="card">
+      <div class="tabs">
+        <button id="login-tab" class="tab active">登录</button>
+        <button id="register-tab" class="tab">注册新账号</button>
       </div>
-
-      <div class="field">
-        <label for="player-name">你的昵称</label>
-        <input id="player-name" type="text" maxlength="12"
-               placeholder="例如：小兔子" autocomplete="nickname">
-      </div>
-
-      <button id="create-btn" class="btn btn-primary">
-        ✨ 创建甜蜜房间
-      </button>
-
-      <div class="separator"><span>或者</span></div>
-
-      <div class="field">
-        <label for="room-code">输入另一半的房间号</label>
-        <input id="room-code" type="text" maxlength="6"
-               placeholder="输入 6 位房间号" autocomplete="off">
-      </div>
-
-      <button id="join-btn" class="btn btn-secondary">
-        💌 加入房间
-      </button>
-
-      <div class="rules">
-        <h3>🎀 闯关小规则</h3>
-        <p>💞 第一关：心有灵犀，+10 爱心</p>
-        <p>🧩 第二关：默契方向，+15 爱心</p>
-        <p>💓 第三关：同频点击，+20 爱心</p>
-        <p>⏰ 每关限时 30 秒，失败后可以重试</p>
-      </div>
+      <h2 id="auth-title">欢迎回来，小可爱 💕</h2>
+      <form id="auth-form">
+        <label for="username">昵称</label>
+        <input id="username" name="username" maxlength="32" required autocomplete="username" placeholder="2–32 个字符">
+        <label for="password">密码</label>
+        <input id="password" name="password" type="password" minlength="8" maxlength="72" required autocomplete="current-password" placeholder="至少 8 位">
+        <button id="auth-submit" class="btn primary" type="submit">登录并开始</button>
+      </form>
+      <p class="tiny">密码经过加密哈希保存，请勿使用其他网站的常用密码。</p>
     </section>
 
-    <section id="waiting-screen" class="panel hidden">
-      <div class="section-icon">🏡</div>
-      <h2>甜蜜房间已准备好！</h2>
-      <p>把房间号分享给你的另一半吧</p>
-
-      <div class="room-code-box">
-        <span>房间号码</span>
-        <strong id="room-code-display">------</strong>
-        <button id="copy-btn" class="btn btn-small">📋 复制</button>
-      </div>
-
-      <div id="player-list" class="player-list"></div>
-      <p id="waiting-message" class="muted">正在等待另一半加入……</p>
-
-      <button id="start-btn" class="btn btn-primary" disabled>
-        💖 开始甜蜜冒险
-      </button>
-      <button id="leave-btn" class="btn btn-ghost">返回首页</button>
-    </section>
-
-    <section id="game-screen" class="panel hidden">
-      <div class="game-top">
-        <span id="level-badge" class="pill">第 1 / 3 关</span>
-        <span id="timer" class="timer">30 秒</span>
-      </div>
-
-      <div class="heart-meter">
-        <div class="heart-meter-label">
-          <span>💗 共同爱心值</span>
-          <strong><span id="heart-score">0</span> / 45</strong>
+    <section id="lobby-panel" class="card hidden">
+      <div class="profile">
+        <div class="avatar">🐰</div>
+        <div class="profile-copy">
+          <h2>你好，<span id="profile-name"></span>！</h2>
+          <p>历史最高通关：<strong id="profile-level">0</strong> / 4 关</p>
+          <p>累计爱心：<strong id="profile-hearts">0</strong> 💗</p>
         </div>
-        <div class="progress-track">
-          <div id="heart-progress" class="progress-fill"></div>
+        <button id="logout-btn" class="text-button">退出</button>
+      </div>
+
+      <div class="subcard">
+        <h3>💌 和用户名组队</h3>
+        <p>输入另一半的注册昵称，绑定你们的搭档关系。</p>
+        <div class="inline-form">
+          <input id="partner-name" maxlength="32" placeholder="对方的用户名">
+          <button id="pair-btn" class="btn secondary">组队</button>
         </div>
       </div>
 
-      <div class="level-progress" aria-label="关卡进度">
-        <span id="step-1" class="step active">💞</span>
-        <span class="step-line"></span>
-        <span id="step-2" class="step">🧩</span>
-        <span class="step-line"></span>
-        <span id="step-3" class="step">💓</span>
-      </div>
-
-      <div id="game-content" class="game-content"></div>
-
-      <div class="team-status">
-        <div class="team-avatar">🐰</div>
-        <div>
-          <strong id="team-status-title">双人合作中</strong>
-          <p id="team-status-text">两个人一起努力！</p>
+      <div class="subcard">
+        <h3>🏡 创建邀请房间</h3>
+        <p>创建房间后，把 6 位房间号分享给另一半。</p>
+        <button id="create-room-btn" class="btn primary">✨ 创建房间</button>
+        <div class="inline-form join-row">
+          <input id="room-code-input" inputmode="numeric" maxlength="6" placeholder="6 位房间号">
+          <button id="join-room-btn" class="btn secondary">加入</button>
         </div>
-        <div class="team-avatar">🐻</div>
+      </div>
+
+      <div class="save-list">
+        <h3>📚 我的关卡存档</h3>
+        <div id="save-items" class="save-items"></div>
       </div>
     </section>
 
-    <section id="finish-screen" class="panel hidden">
-      <div class="finish-confetti">🎉 ✨ 💐 ✨ 🎉</div>
-      <div class="finish-heart">💖</div>
-      <h2>你们通关啦！</h2>
-      <p class="finish-subtitle">原来最棒的默契，就是和你一起。</p>
-
-      <div class="final-score">
-        <span>共同收集爱心</span>
-        <strong>45 <small>点</small></strong>
+    <section id="room-panel" class="card hidden">
+      <div class="room-heading">
+        <span class="eyebrow">甜蜜联机房间</span>
+        <h2>房间号 <strong id="room-code">------</strong></h2>
+        <button id="copy-code-btn" class="btn small">复制房间号</button>
       </div>
-
-      <div class="love-letter">
-        <p>💕 恭喜两位默契满分选手！</p>
-        <p>愿你们往后的每一天，</p>
-        <p>都能像今天一样，彼此理解、彼此陪伴。</p>
-        <p>未来的每一关，也要一起闯哦！🌷</p>
-      </div>
-
-      <button id="play-again-btn" class="btn btn-primary">
-        💗 再玩一次
-      </button>
-      <button id="home-btn" class="btn btn-ghost">
-        返回首页
-      </button>
+      <div id="players" class="players"></div>
+      <p id="room-message" class="message">等待另一半加入……</p>
+      <button id="start-game-btn" class="btn primary" disabled>💖 开始合作闯关</button>
+      <button id="back-lobby-btn" class="btn ghost">返回大厅</button>
     </section>
 
-    <footer>
-      <p>Made with 💕 for two hearts</p>
-    </footer>
+    <section id="game-panel" class="card hidden">
+      <div class="game-head">
+        <span id="level-label" class="pill">第 1 / 4 关</span>
+        <span id="countdown" class="countdown">30 秒</span>
+      </div>
+      <div class="hearts">
+        <div class="hearts-label"><span>💗 本局爱心</span><strong id="hearts-value">0</strong></div>
+        <div class="track"><div id="hearts-bar" class="bar"></div></div>
+      </div>
+      <div id="game-title" class="game-title">双人划船</div>
+      <p id="game-message" class="message">两个人一起配合！</p>
+      <div id="game-board" class="game-board"></div>
+      <div class="role-note" id="role-note">正在分配你的操作面板……</div>
+    </section>
+
+    <section id="finish-panel" class="card hidden">
+      <div class="finish-art">🎉💗🎉</div>
+      <h2>你们是最佳拍档！</h2>
+      <p>四关全部通关，每一次配合都是心动的证明。</p>
+      <div class="finish-score">💖 <strong id="finish-hearts">70</strong> 点爱心</div>
+      <button id="finish-lobby-btn" class="btn primary">回到大厅</button>
+    </section>
+
+    <footer>Made for two hearts · 💞</footer>
   </main>
-
   <script src="/client.js"></script>
 </body>
 </html>
