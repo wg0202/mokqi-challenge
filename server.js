@@ -7,7 +7,7 @@ const path = require('path');
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 80;
 app.use(express.static(path.join(__dirname, 'public')));
 
 const rooms = new Map();
