@@ -1,354 +1,358 @@
-
-const socket = io();
+const socket = io({
+  autoConnect: false,
+  auth: { token: "" }
+});
 
 const $ = id => document.getElementById(id);
+const panels = ["auth-panel", "lobby-panel", "room-panel", "game-panel", "finish-panel"];
+let token = "";
+let me = null;
+let saves = [];
+let authMode = "login";
+let currentRoom = null;
+let myRole = null;
+let noticeTimer = null;
+let countdownTimer = null;
+let touchStart = null;
+let lastTouchMove = 0;
+let heldTouch = false;
+let tugReleased = false;
 
-const screens = [
-  "home-screen",
-  "waiting-screen",
-  "game-screen",
-  "finish-screen"
-];
-
-let currentState = null;
-let selectedAnswer = null;
-let toastTimer = null;
-let timerInterval = null;
-let myName = "";
-let hasSubmitted = false;
-let hasClickedHeart = false;
-
-function escapeHtml(value) {
-  return String(value).replace(/[&<>"']/g, char => ({
-    "&": "&amp;",
-    "<": "&lt;",
-    ">": "&gt;",
-    '"': "&quot;",
-    "'": "&#39;"
-  })[char]);
+function showPanel(id) {
+  panels.forEach(panel => $(panel).classList.toggle("hidden", panel !== id));
 }
-
-function showScreen(screenId) {
-  screens.forEach(id => $(id).classList.toggle("hidden", id !== screenId));
-}
-
-function toast(message) {
-  const el = $("toast");
+function notify(message) {
+  const el = $("notice");
   el.textContent = message;
   el.classList.add("show");
-
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => el.classList.remove("show"), 2600);
+  clearTimeout(noticeTimer);
+  noticeTimer = setTimeout(() => el.classList.remove("show"), 2800);
 }
-
-function setBusy(busy) {
-  $("create-btn").disabled = busy;
-  $("join-btn").disabled = busy;
+function escapeHtml(value) {
+  return String(value).replace(/[&<>"']/g, ch => ({
+    "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"
+  })[ch]);
 }
-
-function playerName() {
-  return ($("player-name").value.trim() || "小可爱").slice(0, 12);
+async function api(url, options = {}) {
+  const headers = { "Content-Type": "application/json", ...(options.headers || {}) };
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const response = await fetch(url, { ...options, headers });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || data.ok === false) throw new Error(data.message || "请求失败");
+  return data;
 }
-
-function createRoom() {
-  myName = playerName();
-  setBusy(true);
-
-  socket.emit("create-room", { name: myName }, result => {
-    setBusy(false);
-
-    if (!result || !result.ok) {
-      toast(result?.message || "创建失败，请重试");
-      return;
-    }
-
-    toast("房间创建成功！快邀请另一半吧 💕");
-  });
+function updateAuthMode(mode) {
+  authMode = mode;
+  $("login-tab").classList.toggle("active", mode === "login");
+  $("register-tab").classList.toggle("active", mode === "register");
+  $("auth-title").textContent = mode === "login" ? "欢迎回来，小可爱 💕" : "创建你的甜蜜账号 💌";
+  $("auth-submit").textContent = mode === "login" ? "登录并开始" : "注册并开始";
+  $("password").autocomplete = mode === "login" ? "current-password" : "new-password";
 }
+$("login-tab").addEventListener("click", () => updateAuthMode("login"));
+$("register-tab").addEventListener("click", () => updateAuthMode("register"));
 
-function joinRoom() {
-  myName = playerName();
-  const code = $("room-code").value.trim().toUpperCase();
-
-  if (!code) {
-    toast("请先输入房间号哦 💌");
-    return;
+$("auth-form").addEventListener("submit", async event => {
+  event.preventDefault();
+  const username = $("username").value.trim();
+  const password = $("password").value;
+  $("auth-submit").disabled = true;
+  try {
+    const result = await api(`/api/${authMode}`, {
+      method: "POST",
+      body: JSON.stringify({ username, password })
+    });
+    token = result.token;
+    me = result.user;
+    saves = result.saves || [];
+    socket.auth = { token };
+    socket.connect();
+    renderProfile();
+    showPanel("lobby-panel");
+    notify(authMode === "login" ? "登录成功，欢迎回来！💗" : "注册成功，欢迎加入！💗");
+  } catch (err) {
+    notify(err.message);
+  } finally {
+    $("auth-submit").disabled = false;
   }
-
-  setBusy(true);
-
-  socket.emit("join-room", { code, name: myName }, result => {
-    setBusy(false);
-
-    if (!result || !result.ok) {
-      toast(result?.message || "加入失败，请重试");
-      return;
-    }
-
-    toast("成功加入甜蜜房间！💕");
-  });
-}
-
-function renderWaiting(state) {
-  showScreen("waiting-screen");
-
-  $("room-code-display").textContent = state.code || "------";
-
-  const avatars = ["🐰", "🐻"];
-
-  $("player-list").innerHTML = state.players.map((player, index) => `
-    <div class="player-card">
-      <div class="avatar">${avatars[index]}</div>
-      <strong>${escapeHtml(player.name)}</strong>
-      <small>${player.connected ? "💚 已连接" : "💔 已断开"}</small>
-    </div>
-  `).join("");
-
-  if (state.players.length < 2) {
-    $("player-list").innerHTML += `
-      <div class="player-card">
-        <div class="avatar">💌</div>
-        <strong>等待另一半</strong>
-        <small>分享房间号即可加入</small>
-      </div>
-    `;
-  }
-
-  const ready = state.players.length === 2 &&
-    state.players.every(player => player.connected);
-
-  $("start-btn").disabled = !ready;
-  $("waiting-message").textContent = ready
-    ? "两位小可爱已经到齐，可以开始啦！💗"
-    : state.message || "正在等待另一半加入……";
-}
-
-function renderSteps(level) {
-  for (let i = 1; i <= 3; i++) {
-    const step = $("step-" + i);
-    step.classList.toggle("active", i === level);
-    step.classList.toggle("done", i < level);
-  }
-}
-
-function renderGame(state) {
-  showScreen("game-screen");
-
-  $("level-badge").textContent = `第 ${state.level} / 3 关`;
-  $("heart-score").textContent = state.hearts;
-  $("heart-progress").style.width =
-    Math.min(100, state.hearts / 45 * 100) + "%";
-
-  renderSteps(state.level);
-
-  const content = $("game-content");
-
-  if (state.phase === "result") {
-    content.innerHTML = `
-      <div class="section-icon">💞</div>
-      <h2>默契挑战</h2>
-      <p class="game-message">${escapeHtml(state.message)}</p>
-      <p class="muted">请稍等，马上继续冒险……</p>
-    `;
-    $("team-status-title").textContent = "双人合作中";
-    $("team-status-text").textContent = "下一次一定会更默契！";
-    return;
-  }
-
-  if (state.phase === "answering" && state.level === 1) {
-    content.innerHTML = `
-      <div class="level-title">💞 第一关 · 心有灵犀</div>
-      <h2 class="level-question">${escapeHtml(state.question)}</h2>
-      <div class="option-grid">
-        ${state.options.map((option, index) => `
-          <button class="option-btn ${
-            selectedAnswer === String(index) ? "selected" : ""
-          }" data-answer="${index}"
-            ${hasSubmitted ? "disabled" : ""}>
-            ${escapeHtml(option)}
-          </button>
-        `).join("")}
-      </div>
-      <p class="game-message">${escapeHtml(state.message)}</p>
-    `;
-  } else if (state.phase === "answering" && state.level === 2) {
-    const target = state.directions.find(
-      item => item.id === state.targetDirection
-    );
-
-    content.innerHTML = `
-      <div class="level-title">🧩 第二关 · 默契方向</div>
-      <h2 class="level-question">跟着指令一起选择！</h2>
-      <div class="target-hint">
-        目标方向：${target ? target.emoji + " " + target.label : ""}
-      </div>
-      <div class="direction-grid">
-        ${state.directions.map(item => `
-          <button class="direction-btn ${
-            selectedAnswer === item.id ? "selected" : ""
-          }" data-answer="${item.id}"
-            ${hasSubmitted ? "disabled" : ""}>
-            ${item.emoji}<span>${item.label}</span>
-          </button>
-        `).join("")}
-      </div>
-      <p class="game-message">${escapeHtml(state.message)}</p>
-    `;
-  } else if (state.level === 3) {
-    const active = state.phase === "heart-active";
-
-    content.innerHTML = `
-      <div class="level-title">💓 第三关 · 同频点击</div>
-      <h2 class="level-question">
-        ${active ? "现在！和另一半一起点击！" : "集中注意力，等待爱心亮起！"}
-      </h2>
-      <div class="big-heart-wrap">
-        <button id="big-heart" class="big-heart ${
-          active ? "active" : ""
-        } ${hasClickedHeart ? "pressed" : ""}"
-          ${!active || hasClickedHeart ? "disabled" : ""}
-          aria-label="点击爱心">
-          ${active ? "❤️" : "🤍"}
-        </button>
-      </div>
-      <p class="game-message">${escapeHtml(state.message)}</p>
-      <p class="muted">两次有效点击间隔需不超过 500 毫秒</p>
-    `;
-  }
-
-  $("team-status-title").textContent = "双人合作中 💗";
-  $("team-status-text").textContent =
-    hasSubmitted || hasClickedHeart
-      ? "你已行动，等待另一半！"
-      : "两个人一起努力！";
-}
-
-function updateTimer() {
-  const el = $("timer");
-
-  if (!currentState || !currentState.deadline) {
-    el.textContent = "-- 秒";
-    el.classList.remove("urgent");
-    return;
-  }
-
-  const remaining = Math.max(
-    0,
-    Math.ceil((currentState.deadline - Date.now()) / 1000)
-  );
-
-  el.textContent = remaining + " 秒";
-  el.classList.toggle("urgent", remaining <= 8);
-}
-
-function renderState(state) {
-  const previousLevel = currentState?.level;
-  const previousPhase = currentState?.phase;
-
-  currentState = state;
-
-  if (previousLevel !== state.level || previousPhase !== state.phase) {
-    selectedAnswer = null;
-    hasSubmitted = false;
-    hasClickedHeart = false;
-  }
-
-  if (state.phase === "waiting" || !state.started) {
-    renderWaiting(state);
-  } else if (state.phase === "finished") {
-    showScreen("finish-screen");
-    $("heart-score").textContent = state.hearts;
-  } else {
-    renderGame(state);
-  }
-
-  updateTimer();
-}
-
-socket.on("connect", () => {
-  toast("连接成功！欢迎来到甜蜜冒险 💕");
 });
 
-socket.on("disconnect", () => {
-  toast("连接中断，请检查网络并刷新页面");
+function renderProfile() {
+  if (!me) return;
+  $("profile-name").textContent = me.username;
+  $("profile-level").textContent = me.max_level;
+  $("profile-hearts").textContent = me.total_hearts;
+  const labels = ["双人划船", "双人长按", "双人迷宫", "双人推箱子"];
+  $("save-items").innerHTML = labels.map((label, index) => {
+    const level = index + 1;
+    const save = saves.find(item => Number(item.level_id) === level);
+    const status = save?.status || (level === 1 ? "unlocked" : "locked");
+    const text = status === "completed" ? "已通关 ✓" : status === "unlocked" ? "已解锁" : "未解锁";
+    return `<div class="save-item ${status === "completed" ? "done" : ""}">
+      <strong>${level}. ${label}</strong>${text}
+    </div>`;
+  }).join("");
+}
+function refreshProfile() {
+  return api("/api/me").then(data => {
+    me = data.user;
+    saves = data.saves || [];
+    renderProfile();
+  }).catch(err => notify(err.message));
+}
+$("logout-btn").addEventListener("click", () => {
+  token = "";
+  me = null;
+  saves = [];
+  socket.disconnect();
+  currentRoom = null;
+  showPanel("auth-panel");
+  notify("已退出登录");
 });
 
-socket.on("connect_error", () => {
-  toast("连接服务器失败，请稍后重试");
+$("pair-btn").addEventListener("click", () => {
+  const username = $("partner-name").value.trim();
+  if (!username) return notify("先输入另一半的用户名哦");
+  socket.emit("pair-username", { username });
 });
-
-socket.on("game-state", state => {
-  renderState(state);
+$("create-room-btn").addEventListener("click", () => socket.emit("create-room"));
+$("join-room-btn").addEventListener("click", () => {
+  const code = $("room-code-input").value.trim();
+  if (!/^\d{6}$/.test(code)) return notify("房间号需要是 6 位数字");
+  socket.emit("join-room", { code });
 });
-
-$("create-btn").addEventListener("click", createRoom);
-$("join-btn").addEventListener("click", joinRoom);
-
-$("room-code").addEventListener("input", event => {
-  event.target.value = event.target.value
-    .replace(/[^a-zA-Z0-9]/g, "")
-    .toUpperCase()
-    .slice(0, 6);
+$("room-code-input").addEventListener("input", event => {
+  event.target.value = event.target.value.replace(/\D/g, "").slice(0, 6);
 });
-
-$("start-btn").addEventListener("click", () => {
-  socket.emit("start-game");
-});
-
-$("copy-btn").addEventListener("click", async () => {
-  const code = $("room-code-display").textContent;
-
+$("copy-code-btn").addEventListener("click", async () => {
+  const code = $("room-code").textContent;
   try {
     await navigator.clipboard.writeText(code);
-    toast("房间号复制成功！快发给另一半 💌");
+    notify("房间号复制成功 💌");
   } catch {
-    toast("请手动复制房间号：" + code);
+    notify("请手动复制房间号：" + code);
   }
 });
-
-$("leave-btn").addEventListener("click", () => {
-  location.reload();
+$("start-game-btn").addEventListener("click", () => socket.emit("start-game"));
+$("back-lobby-btn").addEventListener("click", () => {
+  notify("房间会在玩家断开后清理，请刷新页面重新创建或加入");
+  socket.disconnect();
+  currentRoom = null;
+  setTimeout(() => location.reload(), 500);
+});
+$("finish-lobby-btn").addEventListener("click", () => {
+  currentRoom = null;
+  showPanel("lobby-panel");
+  refreshProfile();
 });
 
-$("home-btn").addEventListener("click", () => {
-  location.reload();
+socket.on("connect", () => {});
+socket.on("connect_error", err => notify(err.message || "连接服务器失败"));
+socket.on("action-error", message => notify(message));
+socket.on("action-success", message => notify(message));
+socket.on("my-role", data => {
+  myRole = data.role;
+  $("role-note").textContent = myRole === "A"
+    ? "你是 A 玩家：负责【上 / 下】方向"
+    : "你是 B 玩家：负责【左 / 右】方向";
 });
-
-$("play-again-btn").addEventListener("click", () => {
-  toast("请先在服务端开启再玩一次功能，或创建新房间。");
+socket.on("room-created", data => {
+  $("room-code").textContent = data.code;
+  notify("房间创建成功，邀请另一半加入吧！");
 });
-
-$("game-content").addEventListener("click", event => {
-  const answerButton = event.target.closest("[data-answer]");
-
-  if (answerButton && currentState?.phase === "answering") {
-    if (hasSubmitted) return;
-
-    selectedAnswer = answerButton.dataset.answer;
-    hasSubmitted = true;
-
-    socket.emit("submit-answer", {
-      answer: selectedAnswer
-    });
-
-    renderGame(currentState);
+socket.on("room-state", room => {
+  currentRoom = room;
+  if (room.phase === "finished") {
+    showPanel("finish-panel");
+    $("finish-hearts").textContent = room.hearts;
+    refreshProfile();
     return;
   }
-
-  if (event.target.closest("#big-heart")) {
-    if (
-      currentState?.phase !== "heart-active" ||
-      hasClickedHeart
-    ) return;
-
-    hasClickedHeart = true;
-    socket.emit("heart-click");
-    renderGame(currentState);
+  if (!room.started || room.phase === "lobby") {
+    showPanel("room-panel");
+    $("room-code").textContent = room.code;
+    $("room-message").textContent = room.message;
+    $("players").innerHTML = room.players.map((player, index) => `
+      <div class="player">
+        <div class="player-emoji">${index === 0 ? "🐰" : "🐻"}</div>
+        <strong>${escapeHtml(player.username)}</strong>
+        <small>${player.connected ? "🟢 已连接" : "🔴 已断开"} · 玩家 ${player.role}</small>
+      </div>
+    `).join("");
+    if (room.players.length < 2) {
+      $("players").innerHTML += `<div class="player"><div class="player-emoji">💌</div><strong>等待另一半</strong><small>分享房间号</small></div>`;
+    }
+    $("start-game-btn").disabled = room.players.length !== 2 || room.players.some(p => !p.connected);
+    return;
   }
+  showPanel("game-panel");
+  renderGame(room);
+});
+socket.on("disconnect", () => {
+  if (token) notify("实时连接已断开，请检查网络并重新登录");
 });
 
-timerInterval = setInterval(updateTimer, 200);
+function renderGame(room) {
+  $("level-label").textContent = `第 ${room.level} / 4 关`;
+  $("hearts-value").textContent = room.hearts;
+  $("hearts-bar").style.width = Math.min(100, room.hearts / 70 * 100) + "%";
+  $("game-message").textContent = room.message;
+  const titles = ["", "双人划船 🚣", "双人长按 · 拔河 🪢", "双人迷宫 🕳️", "双人推箱子 🎁"];
+  $("game-title").textContent = titles[room.level] || "合作闯关";
+  const board = $("game-board");
+  if (room.phase === "result" || room.phase === "saving" || room.phase === "error") {
+    board.innerHTML = `<div class="swipe-area"><div><strong>💗</strong><span>${escapeHtml(room.message)}</span></div></div>`;
+  } else if (room.level === 1) {
+    renderSwipeBoard(board, room);
+  } else if (room.level === 2) {
+    renderTugBoard(board, room);
+  } else if (room.level === 3) {
+    renderMazeBoard(board, room);
+  } else if (room.level === 4) {
+    renderBoxBoard(board, room);
+  }
+  updateCountdown(room);
+}
 
-window.addEventListener("beforeunload", () => {
-  clearInterval(timerInterval);
-});
+function renderSwipeBoard(board, room) {
+  board.innerHTML = `
+    <div class="swipe-area" id="swipe-area">
+      <div><strong>🚣 💞 🚣</strong><span>在这里向任意方向滑动<br>两人要在 0.5 秒内同方向滑动</span></div>
+    </div>
+    <div class="tiny" style="text-align:center">服务器目标方向：${escapeHtml(room.targetDirection || "同步方向")}</div>`;
+  const area = $("swipe-area");
+  area.addEventListener("touchstart", event => {
+    const t = event.changedTouches[0];
+    touchStart = { x: t.clientX, y: t.clientY, at: Date.now() };
+  }, { passive: true });
+  area.addEventListener("touchend", event => {
+    if (!touchStart) return;
+    const t = event.changedTouches[0];
+    const dx = t.clientX - touchStart.x, dy = t.clientY - touchStart.y;
+    touchStart = null;
+    if (Math.max(Math.abs(dx), Math.abs(dy)) < 25) return;
+    const direction = Math.abs(dx) > Math.abs(dy)
+      ? (dx > 0 ? "right" : "left")
+      : (dy > 0 ? "down" : "up");
+    socket.emit("row-swipe", { direction });
+    area.innerHTML = `<div><strong>💗</strong><span>已发送滑动方向：${direction}<br>等待另一半同步……</span></div>`;
+  }, { passive: true });
+}
+
+function renderTugBoard(board, room) {
+  const phase = room.tug?.phase || "countdown";
+  let label = "3 · 2 · 1";
+  if (phase === "release") label = "松手！";
+  board.innerHTML = `
+    <button id="tug-pad" class="tug-pad" type="button">
+      <div><strong>${label}</strong><span>${phase === "release" ? "现在松开屏幕！" : "按住屏幕，等待口令"}</span></div>
+    </button>
+    <p class="tiny" style="text-align:center">两人先按住；听到“松手”后同时松开</p>`;
+  const pad = $("tug-pad");
+  const down = event => {
+    event.preventDefault();
+    if (phase !== "countdown" || heldTouch) return;
+    heldTouch = true;
+    try { pad.setPointerCapture(event.pointerId); } catch {}
+    socket.emit("tug-hold", { held: true });
+    pad.querySelector("strong").textContent = "按住！";
+  };
+  const up = event => {
+    if (!heldTouch) return;
+    heldTouch = false;
+    if (phase === "release" && !tugReleased) {
+      tugReleased = true;
+      socket.emit("tug-release");
+      pad.querySelector("strong").textContent = "已松手";
+    } else {
+      socket.emit("tug-hold", { held: false });
+    }
+  };
+  pad.addEventListener("pointerdown", down);
+  pad.addEventListener("pointerup", up);
+  pad.addEventListener("pointercancel", up);
+  pad.addEventListener("lostpointercapture", up);
+  if (phase === "release") {
+    pad.querySelector("strong").textContent = "松手！";
+    pad.querySelector("span").textContent = "现在松开屏幕！";
+  }
+  if (room.phase === "playing" && phase === "countdown") tugReleased = false;
+}
+
+function makeGrid(size, renderCell) {
+  let html = "";
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) html += renderCell(x, y);
+  }
+  return html;
+}
+function renderMazeBoard(board, room) {
+  const maze = room.maze;
+  if (!maze) return;
+  const traps = new Set(maze.traps);
+  board.innerHTML = `
+    <div class="grid-board" style="grid-template-columns:repeat(9,1fr)">
+      ${makeGrid(9, (x, y) => {
+        let icon = "";
+        if (x === maze.x && y === maze.y) icon = "🐣";
+        else if (x === maze.goal.x && y === maze.goal.y) icon = "🏁";
+        else if (traps.has(`${x},${y}`)) icon = "🕳️";
+        return `<div class="cell ${traps.has(`${x},${y}`) ? "trap" : ""}">${icon}</div>`;
+      })}
+    </div>
+    ${renderDirectionalPad(3, room.level)}
+  `;
+  bindDirectionButtons(board, "maze-move");
+}
+function renderBoxBoard(board, room) {
+  const box = room.box;
+  if (!box) return;
+  const walls = new Set(box.walls);
+  board.innerHTML = `
+    <div class="grid-board" style="grid-template-columns:repeat(7,1fr)">
+      ${makeGrid(7, (x, y) => {
+        let icon = "";
+        const wall = walls.has(`${x},${y}`);
+        if (x === box.player.x && y === box.player.y) icon = "🐣";
+        else if (x === box.crate.x && y === box.crate.y) icon = "🎁";
+        else if (x === box.goal.x && y === box.goal.y) icon = "❤️";
+        else if (wall) icon = "🧱";
+        return `<div class="cell ${wall ? "wall" : ""}">${icon}</div>`;
+      })}
+    </div>
+    ${renderDirectionalPad(3, room.level)}
+  `;
+  bindDirectionButtons(board, "box-move");
+}
+function renderDirectionalPad(size, level) {
+  const directions = myRole === "A"
+    ? [{ d:"up", icon:"⬆️" }, { d:"down", icon:"⬇️" }]
+    : [{ d:"left", icon:"⬅️" }, { d:"right", icon:"➡️" }];
+  return `<div class="touch-pad">
+    <button class="touch-btn blank" tabindex="-1" aria-hidden="true"></button>
+    ${directions.map(item => `<button class="touch-btn" data-dir="${item.d}">${item.icon}</button>`).join("")}
+    <button class="touch-btn blank" tabindex="-1" aria-hidden="true"></button>
+  </div>
+  <p class="tiny" style="text-align:center">${myRole === "A" ? "你控制上下方向" : "你控制左右方向"} · 每次点击移动一步</p>`;
+}
+function bindDirectionButtons(board, eventName) {
+  board.querySelectorAll("[data-dir]").forEach(button => {
+    button.addEventListener("click", () => socket.emit(eventName, { direction: button.dataset.dir }));
+  });
+}
+function updateCountdown(room) {
+  clearInterval(countdownTimer);
+  const tick = () => {
+    if (!currentRoom || !currentRoom.deadline) {
+      $("countdown").textContent = "-- 秒";
+      $("countdown").classList.remove("urgent");
+      return;
+    }
+    const seconds = Math.max(0, Math.ceil((currentRoom.deadline - Date.now()) / 1000));
+    $("countdown").textContent = `${seconds} 秒`;
+    $("countdown").classList.toggle("urgent", seconds <= 8);
+  };
+  tick();
+  countdownTimer = setInterval(tick, 200);
+}
+window.addEventListener("beforeunload", () => clearInterval(countdownTimer));
