@@ -1,137 +1,374 @@
-const express = require('express');
-const http = require('http');
-const { Server } = require('socket.io');
-const crypto = require('crypto');
-const path = require('path');
+
+const express = require("express");
+const http = require("http");
+const { Server } = require("socket.io");
+const crypto = require("crypto");
+const path = require("path");
 
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
+
 const PORT = process.env.PORT || 80;
-app.use(express.static(path.join(__dirname, 'public')));
+const ROUND_MS = 30_000;
+const HEART_DELAY_MS = 3_000;
+const CLICK_WINDOW_MS = 500;
+
+app.use(express.static(path.join(__dirname, "public")));
 
 const rooms = new Map();
-const rounds = ['quiz', 'rps', 'reaction', 'choice', 'random'];
+
 const questions = [
-  { q: '周末突然放假，你更想？', a: ['宅家放松', '出门探索', '睡到自然醒', '都可以'] },
-  { q: '哪种超能力最实用？', a: ['瞬间移动', '时间暂停', '读懂动物', '无限美食'] },
-  { q: '深夜肚子饿了，你会？', a: ['点外卖', '找零食', '忍一忍', '拉朋友一起吃'] },
-  { q: '旅行时最重要的是？', a: ['美食', '风景', '同伴', '计划外的惊喜'] },
-  { q: '如果中了小奖，你会？', a: ['请朋友吃饭', '存起来', '买喜欢的东西', '马上安排旅行'] }
-];
-const choices = [
-  { q: '只能选一个：', a: ['海边发呆', '山里徒步'] },
-  { q: '理想的周末：', a: ['宅家看剧', '出门玩一天'] },
-  { q: '午夜小吃选谁：', a: ['炸鸡薯条', '烧烤火锅'] },
-  { q: '旅行风格：', a: ['提前做攻略', '随心走走'] },
-  { q: '获得礼物更喜欢：', a: ['实用惊喜', '浪漫仪式感'] }
-];
-const randomEvents = [
-  { title: '好运加倍！', desc: '本轮得分额外 +2。', bonus: 2 },
-  { title: '默契加成！', desc: '两人选了相同答案就额外 +3。', bonus: 3 },
-  { title: '轻松一局', desc: '本轮只为开心，不加不扣分。', bonus: 0 },
-  { title: '反应时刻', desc: '准备好了吗？下一轮拼手速！', bonus: 1 }
-];
-function code() { return crypto.randomBytes(3).toString('hex').toUpperCase(); }
-function publicRoom(room) {
-  return { code: room.code, players: [...room.players.values()].map(p => ({ id: p.id, name: p.name, score: p.score, ready: p.ready })), started: room.started, roundIndex: room.roundIndex };
-}
-function emitRoom(room) { io.to(room.code).emit('room:update', publicRoom(room)); }
-function getRoomFor(socket) {
-  for (const r of rooms.values()) if (r.players.has(socket.id)) return r;
-  return null;
-}
-function finishRound(room) {
-  if (!room.current || room.current.finished) return;
-  const entries = [...room.players.values()];
-  if (entries.length < 2 || entries.some(p => !room.current.answers[p.id])) return;
-  const r = room.current;
-  const [p1, p2] = entries;
-  const a1 = r.answers[p1.id], a2 = r.answers[p2.id];
-  let result = { title: '本轮结果', detail: '', scores: {} };
-  const add = (p, n) => { p.score += n; result.scores[p.id] = (result.scores[p.id] || 0) + n; };
-  if (r.type === 'quiz') {
-    if (a1 === a2) { add(p1, 2); add(p2, 2); result.detail = '你们选了一样的答案！双方 +2 分'; }
-    else { add(p1, 1); add(p2, 1); result.detail = '答案不同也没关系，勇敢表达各 +1 分'; }
-  } else if (r.type === 'rps') {
-    if (a1 === a2) result.detail = '平局！再来一把也许就分胜负。';
-    else if ((a1 === '石头' && a2 === '剪刀') || (a1 === '剪刀' && a2 === '布') || (a1 === '布' && a2 === '石头')) { add(p1, 3); result.detail = `${p1.name} 获胜，+3 分！`; }
-    else { add(p2, 3); result.detail = `${p2.name} 获胜，+3 分！`; }
-  } else if (r.type === 'reaction') {
-    const t1 = Number(a1), t2 = Number(a2);
-    if (t1 < 0 || t2 < 0) result.detail = '有人没赶上点击，本轮不计分。';
-    else if (Math.abs(t1-t2) < 5) { add(p1, 2); add(p2, 2); result.detail = '几乎同时！双方 +2 分'; }
-    else if (t1 < t2) { add(p1, 3); add(p2, 1); result.detail = `${p1.name} 更快！+3 分，对手 +1 分`; }
-    else { add(p2, 3); add(p1, 1); result.detail = `${p2.name} 更快！+3 分，对手 +1 分`; }
-  } else if (r.type === 'choice') {
-    if (a1 === a2) { add(p1, 3); add(p2, 3); result.detail = '心有灵犀！双方 +3 分'; }
-    else { add(p1, 1); add(p2, 1); result.detail = '选择不同，各得参与分 +1'; }
-  } else if (r.type === 'random') {
-    const event = r.event;
-    if (event.bonus === 3 && a1 === a2) { add(p1, 3); add(p2, 3); result.detail = '默契触发！双方 +3 分'; }
-    else if (event.bonus === 2) { add(p1, 2); add(p2, 2); result.detail = '好运降临！双方 +2 分'; }
-    else if (event.bonus === 1) { if (a1 === a2) { add(p1, 2); add(p2, 2); result.detail = '反应默契！双方 +2 分'; } else { add(p1, 1); add(p2, 1); result.detail = '双方各 +1 分'; } }
-    else result.detail = '本轮纯娱乐，不加不扣分！';
+  {
+    question: "如果周末可以一起出去玩，你最想去哪里？",
+    options: ["海边看日落 🌅", "游乐园 🎡", "山里露营 ⛺", "在家抱抱 🧸"]
+  },
+  {
+    question: "你觉得两个人最浪漫的约会是什么？",
+    options: ["一起看星星 ✨", "一起做好吃的 🍰", "牵手散步 🌷", "一起看电影 🎬"]
+  },
+  {
+    question: "如果收到对方的小惊喜，你最期待什么？",
+    options: ["一封情书 💌", "一束鲜花 💐", "一顿大餐 🍓", "一个拥抱 🤗"]
   }
-  r.finished = true;
-  io.to(room.code).emit('round:result', { title: result.title, detail: result.detail, players: entries.map(p => ({ id: p.id, name: p.name, answer: r.answers[p.id], score: p.score, gained: result.scores[p.id] || 0 })), event: r.event || null });
-  emitRoom(room);
+];
+
+const directions = [
+  { id: "up", label: "向上", emoji: "⬆️" },
+  { id: "down", label: "向下", emoji: "⬇️" },
+  { id: "left", label: "向左", emoji: "⬅️" },
+  { id: "right", label: "向右", emoji: "➡️" }
+];
+
+function makeCode() {
+  return crypto.randomBytes(3).toString("hex").toUpperCase();
 }
-io.on('connection', socket => {
-  socket.on('room:create', ({ name }, cb) => {
-    let c = code(); while (rooms.has(c)) c = code();
-    const room = { code: c, players: new Map(), started: false, roundIndex: 0, current: null };
-    room.players.set(socket.id, { id: socket.id, name: String(name || '玩家 1').slice(0, 16), score: 0, ready: true });
-    rooms.set(c, room); socket.join(c);
-    cb && cb({ ok: true, code: c, invite: null }); emitRoom(room);
-  });
-  socket.on('room:join', ({ code: c, name }, cb) => {
-    c = String(c || '').toUpperCase().trim();
-    const room = rooms.get(c);
-    if (!room) return cb && cb({ ok: false, error: '房间不存在或已关闭，请让好友重新创建房间。' });
-    if (room.players.size >= 2 && !room.players.has(socket.id)) return cb && cb({ ok: false, error: '房间已满，每个房间只能有两位玩家。' });
-    if (!room.players.has(socket.id)) room.players.set(socket.id, { id: socket.id, name: String(name || '玩家 2').slice(0, 16), score: 0, ready: true });
-    socket.join(c); cb && cb({ ok: true, code: c }); emitRoom(room);
-  });
-  socket.on('game:start', () => {
-    const room = getRoomFor(socket); if (!room || room.players.size !== 2) return;
-    room.started = true; room.roundIndex = 0; room.players.forEach(p => p.score = 0);
-    startRound(room); emitRoom(room);
-  });
-  socket.on('round:answer', ({ answer }) => {
-    const room = getRoomFor(socket); if (!room || !room.current || room.current.finished || !room.players.has(socket.id)) return;
-    if (room.current.answers[socket.id] !== undefined) return;
-    room.current.answers[socket.id] = answer;
-    io.to(room.code).emit('round:progress', { count: Object.keys(room.current.answers).length });
-    finishRound(room);
-  });
-  socket.on('game:next', () => {
-    const room = getRoomFor(socket); if (!room || !room.current || !room.current.finished) return;
-    room.roundIndex++;
-    if (room.roundIndex >= rounds.length) {
-      room.started = false;
-      const standings = [...room.players.values()].sort((a,b) => b.score-a.score).map(p => ({ name: p.name, score: p.score, id: p.id }));
-      io.to(room.code).emit('game:over', { standings }); emitRoom(room); return;
+
+function getRoom(socket) {
+  const code = socket.data.roomCode;
+  return code ? rooms.get(code) : null;
+}
+
+function getPlayerName(room, socketId) {
+  const player = room.players.find(p => p.id === socketId);
+  return player ? player.name : "小伙伴";
+}
+
+function publicState(room) {
+  return {
+    code: room.code,
+    players: room.players.map(p => ({
+      name: p.name,
+      connected: p.connected
+    })),
+    started: room.started,
+    level: room.level,
+    hearts: room.hearts,
+    phase: room.phase,
+    deadline: room.deadline,
+    question: room.question,
+    options: room.options,
+    targetDirection: room.targetDirection,
+    directions,
+    heartRedAt: room.heartRedAt,
+    message: room.message
+  };
+}
+
+function sendState(room) {
+  io.to(room.code).emit("game-state", publicState(room));
+}
+
+function clearTimers(room) {
+  if (room.roundTimer) clearTimeout(room.roundTimer);
+  if (room.heartTimer) clearTimeout(room.heartTimer);
+  if (room.retryTimer) clearTimeout(room.retryTimer);
+
+  room.roundTimer = null;
+  room.heartTimer = null;
+  room.retryTimer = null;
+}
+
+function stopRoom(room) {
+  clearTimers(room);
+  room.deadline = null;
+}
+
+function resetRoom(code) {
+  const room = rooms.get(code);
+  if (!room) return;
+
+  stopRoom(room);
+  room.started = false;
+  room.level = 0;
+  room.hearts = 0;
+  room.phase = "waiting";
+  room.answers = {};
+  room.clicks = {};
+  room.question = "";
+  room.options = [];
+  room.targetDirection = null;
+  room.heartRedAt = null;
+  room.message = "两个人都准备好了吗？💕";
+
+  sendState(room);
+}
+
+function beginGame(room) {
+  if (room.players.length !== 2) return;
+
+  stopRoom(room);
+  room.started = true;
+  room.level = 1;
+  room.hearts = 0;
+  startLevel(room);
+}
+
+function startLevel(room) {
+  clearTimers(room);
+  room.answers = {};
+  room.clicks = {};
+  room.deadline = Date.now() + ROUND_MS;
+  room.question = "";
+  room.options = [];
+  room.targetDirection = null;
+  room.heartRedAt = null;
+
+  if (room.level === 1) {
+    const item = questions[crypto.randomInt(questions.length)];
+    room.question = item.question;
+    room.options = item.options;
+    room.phase = "answering";
+    room.message = "选出你们心中的同一个答案！";
+  } else if (room.level === 2) {
+    const item = directions[crypto.randomInt(directions.length)];
+    room.targetDirection = item.id;
+    room.phase = "answering";
+    room.message = `默契指令：${item.emoji} ${item.label}`;
+  } else if (room.level === 3) {
+    room.phase = "heart-wait";
+    room.message = "准备好了吗？爱心即将亮起！";
+    room.heartTimer = setTimeout(() => {
+      if (!room.started || room.level !== 3) return;
+
+      room.phase = "heart-active";
+      room.heartRedAt = Date.now();
+      room.message = "现在！一起点击大爱心！";
+      sendState(room);
+    }, HEART_DELAY_MS);
+  }
+
+  room.roundTimer = setTimeout(() => {
+    if (room.started && room.phase !== "result") {
+      failLevel(room, "时间到啦，再试一次吧！");
     }
-    startRound(room); emitRoom(room);
+  }, ROUND_MS);
+
+  sendState(room);
+}
+
+function failLevel(room, message) {
+  if (!room.started || room.phase === "result") return;
+
+  clearTimers(room);
+  room.phase = "result";
+  room.message = message;
+  room.deadline = null;
+  sendState(room);
+
+  room.retryTimer = setTimeout(() => {
+    if (!room.started || !rooms.has(room.code)) return;
+    startLevel(room);
+  }, 1800);
+}
+
+function completeLevel(room, points) {
+  if (!room.started || room.phase === "result") return;
+
+  clearTimers(room);
+  room.hearts += points;
+
+  if (room.level >= 3) {
+    room.phase = "finished";
+    room.message = "恭喜你们！你们是最有默契的情侣！💖";
+    room.deadline = null;
+    sendState(room);
+    return;
+  }
+
+  room.phase = "result";
+  room.message = `默契成功！共同获得 ${points} 点爱心！💗`;
+  room.deadline = null;
+  sendState(room);
+
+  room.retryTimer = setTimeout(() => {
+    if (!room.started || !rooms.has(room.code)) return;
+    room.level += 1;
+    startLevel(room);
+  }, 1600);
+}
+
+io.on("connection", socket => {
+  socket.emit("connected", { id: socket.id });
+
+  socket.on("create-room", (payload = {}, callback) => {
+    let code;
+    do {
+      code = makeCode();
+    } while (rooms.has(code));
+
+    const name = String(payload.name || "小可爱")
+      .trim()
+      .slice(0, 12) || "小可爱";
+
+    const room = {
+      code,
+      players: [{ id: socket.id, name, connected: true }],
+      started: false,
+      level: 0,
+      hearts: 0,
+      phase: "waiting",
+      deadline: null,
+      question: "",
+      options: [],
+      targetDirection: null,
+      heartRedAt: null,
+      answers: {},
+      clicks: {},
+      message: "房间创建成功，邀请你的另一半加入吧！💕",
+      roundTimer: null,
+      heartTimer: null,
+      retryTimer: null
+    };
+
+    rooms.set(code, room);
+    socket.join(code);
+    socket.data.roomCode = code;
+
+    sendState(room);
+    if (typeof callback === "function") callback({ ok: true, code });
   });
-  socket.on('disconnect', () => {
-    const room = getRoomFor(socket);
+
+  socket.on("join-room", (payload = {}, callback) => {
+    const code = String(payload.code || "").trim().toUpperCase();
+    const room = rooms.get(code);
+
+    const reply = data => {
+      if (typeof callback === "function") callback(data);
+    };
+
+    if (!room) return reply({ ok: false, message: "没有找到这个房间，请检查房间号。" });
+    if (room.players.length >= 2) {
+      return reply({ ok: false, message: "房间已经满啦！" });
+    }
+    if (room.started) {
+      return reply({ ok: false, message: "游戏已经开始，暂时不能加入。" });
+    }
+
+    const name = String(payload.name || "小甜心")
+      .trim()
+      .slice(0, 12) || "小甜心";
+
+    room.players.push({ id: socket.id, name, connected: true });
+    socket.join(code);
+    socket.data.roomCode = code;
+
+    room.message = "两位玩家到齐啦！准备开始甜蜜冒险！";
+    sendState(room);
+    reply({ ok: true, code });
+  });
+
+  socket.on("start-game", () => {
+    const room = getRoom(socket);
+    if (!room || room.players.length !== 2 || room.started) return;
+    if (room.players.some(p => !p.connected)) return;
+
+    beginGame(room);
+  });
+
+  socket.on("submit-answer", payload => {
+    const room = getRoom(socket);
+    if (!room || !room.started || room.phase !== "answering") return;
+    if (Date.now() > room.deadline) return;
+    if (!room.players.some(p => p.id === socket.id)) return;
+    if (Object.prototype.hasOwnProperty.call(room.answers, socket.id)) return;
+
+    const answer = String(payload && payload.answer || "");
+    const allowed = room.level === 1
+      ? room.options.map((_, index) => String(index))
+      : directions.map(d => d.id);
+
+    if (!allowed.includes(answer)) return;
+
+    room.answers[socket.id] = answer;
+
+    const submitted = Object.keys(room.answers).length;
+    if (submitted < 2) {
+      room.message = `${getPlayerName(room, socket.id)} 已经做好选择，等待另一半……`;
+      sendState(room);
+      return;
+    }
+
+    const values = Object.values(room.answers);
+    if (values[0] === values[1]) {
+      completeLevel(room, room.level === 1 ? 10 : 15);
+    } else {
+      failLevel(room, "差一点点就默契成功啦！准备重试 💞");
+    }
+  });
+
+  socket.on("heart-click", () => {
+    const room = getRoom(socket);
+    if (!room || !room.started || room.level !== 3) return;
+    if (room.phase !== "heart-active") return;
+    if (!room.players.some(p => p.id === socket.id)) return;
+    if (Date.now() > room.deadline) return;
+    if (Object.prototype.hasOwnProperty.call(room.clicks, socket.id)) return;
+
+    room.clicks[socket.id] = Date.now();
+
+    if (Object.keys(room.clicks).length < 2) {
+      room.message = "收到一次点击！另一半快跟上！💓";
+      sendState(room);
+      return;
+    }
+
+    const times = Object.values(room.clicks);
+    const difference = Math.abs(times[0] - times[1]);
+
+    if (difference <= CLICK_WINDOW_MS) {
+      completeLevel(room, 20);
+    } else {
+      failLevel(room, "心跳差了一点点！再试一次吧 💗");
+    }
+  });
+
+  socket.on("disconnect", () => {
+    const room = getRoom(socket);
     if (!room) return;
-    room.players.delete(socket.id);
-    if (room.players.size === 0) rooms.delete(room.code);
-    else { room.started = false; room.current = null; io.to(room.code).emit('notice', '好友已断开连接，房间暂时回到等待状态。'); emitRoom(room); }
+
+    const player = room.players.find(p => p.id === socket.id);
+    if (player) player.connected = false;
+
+    if (room.started) {
+      stopRoom(room);
+      room.started = false;
+      room.phase = "waiting";
+      room.deadline = null;
+      room.message = "有一位玩家掉线了，请重新连接后创建新房间再玩。";
+    } else {
+      room.message = "有一位玩家离开了房间。";
+    }
+
+    sendState(room);
+
+    if (room.players.every(p => !p.connected)) {
+      stopRoom(room);
+      rooms.delete(room.code);
+    }
   });
 });
-function startRound(room) {
-  const type = rounds[room.roundIndex];
-  const r = { type, answers: {}, finished: false };
-  if (type === 'quiz') { const q = questions[Math.floor(Math.random()*questions.length)]; r.prompt=q.q; r.options=q.a; r.title='同步答题'; r.tip='同时选出你的答案，看看你们有多默契！'; }
-  if (type === 'rps') { r.prompt='出拳！'; r.options=['石头','剪刀','布']; r.title='猜拳对决'; r.tip='双方选好后同时揭晓。'; }
-  if (type === 'reaction') { r.prompt='等绿色出现，立刻点击！'; r.options=[]; r.title='反应力挑战'; r.tip='先准备好，信号出现前不要点。'; r.signalAt=Date.now()+1800+Math.floor(Math.random()*1800); }
-  if (type === 'choice') { const q=choices[Math.floor(Math.random()*choices.length)]; r.prompt=q.q; r.options=q.a; r.title='趣味选择'; r.tip='选择你的偏好，看看是否一样。'; }
-  if (type === 'random') { const e=randomEvents[Math.floor(Math.random()*randomEvents.length)]; r.event=e; r.prompt=e.title; r.options=['接受挑战','来点好运']; r.title='随机事件'; r.tip=e.desc; }
-  room.current=r;
-  io.to(room.code).emit('round:start', { type:r.type, title:r.title, prompt:r.prompt, options:r.options, tip:r.tip, round:room.roundIndex+1, total:rounds.length, signalAt:r.signalAt, event:r.event || null, serverNow:Date.now() });
-}
-server.listen(PORT, () => console.log(`默契挑战运行中：http://localhost:${PORT}`));
+
+server.listen(PORT, () => {
+  console.log(`情侣默契大通关已启动，端口：${PORT}`);
+});
